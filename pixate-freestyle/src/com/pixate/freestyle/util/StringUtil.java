@@ -100,4 +100,26 @@ public class StringUtil {
         }
         return false;
     }
+
+    /**
+     * Truncates the string to a particular length while appending ... to the
+     * end.
+     * 
+     * @param text the string to be truncated
+     * @param length the length to truncate to
+     * @return the truncated string
+     */
+    public static String truncate(String text, int length) {
+        if (text == null || text.length() <= length) {
+            return text;
+        }
+        return text.substring(0, length - 3) + "...";
+    }
+
+    public static int compare(String lhs, String rhs) {
+        if (lhs == null) {
+            return rhs == null ? 0 : 1;
+        }
+        return rhs == null ? -1 : lhs.compareTo(rhs);
+    }
 }

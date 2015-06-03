@@ -18,7 +18,7 @@ package com.pixate.freestyle;
 import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.Proxy;
 import java.util.List;
-import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 import android.annotation.TargetApi;
 import android.app.ActionBar;
@@ -28,6 +28,7 @@ import android.app.Application.ActivityLifecycleCallbacks;
 import android.app.Fragment;
 import android.content.Context;
 import android.os.Build;
+import android.util.Log;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Adapter;
@@ -103,8 +104,8 @@ public class PixateFreestyle {
 
     private static final String TAG = PixateFreestyle.class.getSimpleName();
     public static final boolean ICS_OR_BETTER = Build.VERSION.SDK_INT >= Build.VERSION_CODES.ICE_CREAM_SANDWICH;
-    public static String DEFAULT_CSS = "default.css";
-    private static AtomicBoolean cssLoaded = new AtomicBoolean(false);
+    private static String DEFAULT_CSS = "default.css";
+    private static AtomicReference<String> currentCSS = new AtomicReference<String>();
 
     private static Object mLifecycleCallbacks = null;
 
@@ -112,17 +113,32 @@ public class PixateFreestyle {
     private static Context mAppContext = null;
 
     /**
-     * Initialize Pixate with the given {@link Context}.
-     * 
+     * Initialize Pixate with the given {@link Context}, using the styles in default.css.
+     *
      * @param context
      */
     public static void init(Context context) {
-        mAppContext = context.getApplicationContext();
+        init(context, DEFAULT_CSS);
+    }
 
-        if (!cssLoaded.getAndSet(true)) {
+    /**
+     * Initialize Pixate with the given {@link Context} and CSS file.
+     *
+     * @param context
+     * @param cssFileName The CSS file to load styles from
+     */
+    public static void init(Context context, String cssFileName) {
+        if (mAppContext == null) {
+            mAppContext = context.getApplicationContext();
+            // log a version
+            Log.i(TAG, String.format("Pixate Freestyle version %s (API version %d)", getVersion(),
+                    getApiVersion()));
+        }
+
+        if (cssFileName != currentCSS.getAndSet(cssFileName)) {
             // try to load the default CSS ones.
             PXStylesheet stylesheet = PXStylesheet.getStyleSheetFromFilePath(
-                    context.getApplicationContext(), DEFAULT_CSS, PXStyleSheetOrigin.APPLICATION);
+                    context.getApplicationContext(), cssFileName, PXStyleSheetOrigin.APPLICATION);
             if (stylesheet != null) {
                 logErrors(stylesheet.getErrors());
             }
@@ -163,7 +179,7 @@ public class PixateFreestyle {
     }
 
     public static void init(View view, String cssId, String cssClass, String cssStyle) {
-            ViewUtil.initView(view, cssId, cssClass, cssStyle);
+        ViewUtil.initView(view, cssId, cssClass, cssStyle);
     }
 
     /**

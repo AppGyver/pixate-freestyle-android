@@ -25,14 +25,18 @@ import java.util.Map;
 import java.util.Set;
 
 import android.annotation.TargetApi;
+import android.graphics.Bitmap;
 import android.graphics.RectF;
 import android.graphics.drawable.BitmapDrawable;
+import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.DrawableContainer;
 import android.graphics.drawable.DrawableContainer.DrawableContainerState;
+import android.graphics.drawable.LayerDrawable;
 import android.graphics.drawable.StateListDrawable;
 import android.os.Build;
 import android.view.View;
+import android.widget.ImageView;
 
 import com.pixate.freestyle.PixateFreestyle;
 import com.pixate.freestyle.cg.paints.PXPaint;
@@ -156,7 +160,29 @@ public class PXDrawableUtil {
     public static Drawable createDrawable(RectF bounds, PXPaint paint) {
         PXRectangle rectangle = new PXRectangle(bounds);
         rectangle.setFillColor(paint);
-        return rectangle.renderToImage(bounds, true);
+        return rectangle.renderToImage(bounds, paint.isOpaque());
+    }
+
+    /**
+     * Sets a background {@link Drawable} on a view. In case the call is set to
+     * check for a layer-drawable and there is an existing {@link LayerDrawable}
+     * on the given View, set/replace the layer with the
+     * {@code android.R.id.background} id.
+     * 
+     * @param view
+     * @param drawable
+     * @param checkForLayer Indicate if this method should check for a
+     *            {@link LayerDrawable} when applying a background.
+     */
+    public static void setBackgroundDrawable(View view, Drawable drawable, boolean checkForLayer) {
+        Drawable background = view.getBackground();
+        if (checkForLayer && background instanceof LayerDrawable) {
+            LayerDrawable layeredBG = (LayerDrawable) background;
+            layeredBG.setDrawableByLayerId(android.R.id.background, drawable);
+            layeredBG.invalidateSelf();
+        } else {
+            setBackgroundDrawable(view, drawable);
+        }
     }
 
     /**
@@ -177,6 +203,37 @@ public class PXDrawableUtil {
     @TargetApi(Build.VERSION_CODES.JELLY_BEAN)
     private static void setBackgroundJB(View view, Drawable drawable) {
         view.setBackground(drawable);
+    }
+
+    /**
+     * Sets a {@link Bitmap} background. In case the call is set to check for a
+     * layer-drawable and there is an existing {@link LayerDrawable} on the
+     * given View, set/replace the layer with the
+     * {@code android.R.id.background} id.
+     * 
+     * @param view
+     * @param bitmap
+     * @param checkForLayer Indicate if this method should check for a
+     *            {@link LayerDrawable} when applying a background.
+     */
+    public static void setBackground(View view, Bitmap bitmap, boolean checkForLayer) {
+        if (view instanceof ImageView) {
+            ((ImageView) view).setImageBitmap(bitmap);
+            return;
+        }
+        BitmapDrawable newDrawable = new BitmapDrawable(PixateFreestyle.getAppContext()
+                .getResources(), bitmap);
+        Drawable background = view.getBackground();
+        if (background instanceof ColorDrawable) {
+            // keep the background color so it would show when the bitmap is
+            // transparent
+            LayerDrawable layerDrawable = new LayerDrawable(new Drawable[] { background,
+                    newDrawable });
+            layerDrawable.setId(1, android.R.id.background);
+            setBackgroundDrawable(view, layerDrawable);
+        } else {
+            setBackgroundDrawable(view, newDrawable, checkForLayer);
+        }
     }
 
     /**

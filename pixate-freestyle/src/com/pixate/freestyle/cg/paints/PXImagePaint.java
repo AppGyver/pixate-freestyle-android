@@ -15,71 +15,64 @@
  ******************************************************************************/
 package com.pixate.freestyle.cg.paints;
 
+import java.io.IOException;
 import java.io.InputStream;
-import java.net.URL;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.Locale;
 import java.util.Set;
 
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
+import android.graphics.Color;
+import android.graphics.NinePatch;
 import android.graphics.Paint;
 import android.graphics.Path;
 import android.graphics.Picture;
 import android.graphics.Rect;
 import android.graphics.RectF;
+import android.graphics.drawable.BitmapDrawable;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.NinePatchDrawable;
 import android.net.Uri;
 import android.os.AsyncTask;
+import android.os.Looper;
 
+import com.pixate.freestyle.PixateFreestyle;
 import com.pixate.freestyle.cg.parsing.PXSVGLoader;
 import com.pixate.freestyle.cg.shapes.PXShapeDocument;
+import com.pixate.freestyle.pxcomponentkit.view.overlay.PXBorderOverlay;
+import com.pixate.freestyle.util.LoadingCallback;
 import com.pixate.freestyle.util.PXLog;
+import com.pixate.freestyle.util.PXURLBitmapLoader;
 import com.pixate.freestyle.util.StringUtil;
 import com.pixate.freestyle.util.UrlStreamOpener;
 
 public class PXImagePaint extends BasePXPaint {
     private static final String TAG = PXImagePaint.class.getSimpleName();
     private static final Set<String> SUPPORTED_REMOTE_SCHEMES = new HashSet<String>(Arrays.asList(
-            "http", "https", "ftp"));
+            "http", "https", "pixate"));
 
     public enum PXImageRepeatType {
-        REPEAT, SPACE, ROUND, NOREPEAT
+        REPEAT,
+        SPACE,
+        ROUND,
+        NOREPEAT
     };
 
     private Uri imageURL;
-    private AsyncTask<Uri, Void, Object> remoteImageLoader;
+    private RemoteLoader<Bitmap> remoteBitmapLoader;
+    private RemoteLoader<PXShapeDocument> remoteSVGLoader;
+    private boolean isOpaque;
 
     public PXImagePaint(Uri imageURL) {
+        this(imageURL, true);
+    }
+
+    public PXImagePaint(Uri imageURL, boolean isOpaque) {
         this.imageURL = imageURL;
-        String scheme = imageURL.getScheme();
-        if (scheme != null && SUPPORTED_REMOTE_SCHEMES.contains(scheme.toLowerCase(Locale.US))) {
-            // Start a FutureTask to load that image.
-            // Note that this may require INTERNET permissions in the manifest.
-            // <uses-permission android:name="android.permission.INTERNET" />
-            // The returned value can be a Drawable, in case that the url is for
-            // an image, and a PXShapeDocument in case the url represents a path
-            // to an SVG resource.
-            remoteImageLoader = new AsyncTask<Uri, Void, Object>() {
-                @Override
-                protected Object doInBackground(Uri... params) {
-                    try {
-                        if (hasSVGImageURL()) {
-                            return PXSVGLoader.loadFromStream(UrlStreamOpener.open(params[0]
-                                    .toString()));
-                        } else {
-                            return NinePatchDrawable.createFromStream(
-                                    new URL(params[0].toString()).openStream(), null);
-                        }
-                    } catch (Exception e) {
-                        PXLog.e(TAG, e, "Error while loading remote image " + params[0]);
-                    }
-                    return null;
-                }
-            };
-            remoteImageLoader.execute(imageURL);
-        }
+        this.isOpaque = isOpaque;
     }
 
     /*
@@ -87,8 +80,25 @@ public class PXImagePaint extends BasePXPaint {
      * @see com.pixate.freestyle.cg.paints.PXPaint#isOpaque()
      */
     public boolean isOpaque() {
-        // TODO
-        return true;
+        return isOpaque;
+    }
+
+    /**
+     * Sets the opaque flag for this image paint.
+     * 
+     * @param isOpaque
+     */
+    public void setOpaque(boolean isOpaque) {
+        this.isOpaque = isOpaque;
+    }
+
+    /*
+     * (non-Javadoc)
+     * @see com.pixate.freestyle.cg.paints.PXPaint#isAsynchronous()
+     */
+    @Override
+    public boolean isAsynchronous() {
+        return isRemote();
     }
 
     public boolean hasSVGImageURL() {
@@ -108,9 +118,79 @@ public class PXImagePaint extends BasePXPaint {
         return imageURL;
     }
 
+    /**
+     * Returns true if this image-paint can return a {@link Bitmap} directly
+     * instead of a {@link Picture} instance that will later be rendered on a
+     * Canvas/Bitmap.
+     * 
+     * @return <code>true</code> in case this image paint is pointing to a
+     *         bitmap asset. <code>false</code> otherwise (and SVG, for
+     *         example).
+     */
+    public boolean canLoadAsBitmap() {
+        return imageURL != null && !hasSVGImageURL();
+    }
+
+    /**
+     * Returns a {@link Bitmap} instance for this image-paint. Call this only
+     * when {@link #canLoadAsBitmap()} returns <code>true</code>, otherwise,
+     * <code>null</code> will be returned.
+     * 
+     * @param bounds
+     * @return A {@link Bitmap}
+     */
+    public Bitmap bitmapForBounds(Rect bounds) {
+        Bitmap bitmap = null;
+        if (canLoadAsBitmap()) {
+            initRemoteLoader(bounds);
+            InputStream inputStream = null;
+            try {
+                if (remoteBitmapLoader != null) {
+                    // note that the remoteBitmapLoader was already initialized
+                    // with the right bounds, so there is no need to resize.
+                    bitmap = remoteBitmapLoader.get();
+                } else {
+                    inputStream = UrlStreamOpener.open(imageURL);
+                    BitmapFactory.Options options = new BitmapFactory.Options();
+                    options.inJustDecodeBounds = true;
+                    BitmapFactory.decodeStream(inputStream, new Rect(), options);
+                    try {
+                        inputStream.close();
+                    } catch (IOException e) {
+                    }
+
+                    // calculates the sample size
+                    options.inSampleSize = PXURLBitmapLoader.calculateSampleSize(options,
+                            bounds.width(), bounds.height());
+                    options.inJustDecodeBounds = false;
+
+                    // grab the bitmap at the requested size
+                    inputStream = UrlStreamOpener.open(imageURL);
+                    bitmap = BitmapFactory.decodeStream(inputStream, new Rect(), options);
+                }
+            } finally {
+                if (inputStream != null) {
+                    try {
+                        inputStream.close();
+                    } catch (IOException e) {
+                    }
+                }
+            }
+        }
+        return bitmap;
+    }
+
+    /**
+     * Returns a {@link Picture} instance with the loaded {@link Bitmap} or SVG
+     * graphics in it.
+     * 
+     * @param bounds
+     * @return A {@link Picture}
+     */
     public Picture imageForBounds(Rect bounds) {
         Picture image = null;
         if (imageURL != null) {
+            initRemoteLoader(bounds);
             // create image
             try {
                 image = new Picture();
@@ -120,8 +200,8 @@ public class PXImagePaint extends BasePXPaint {
                     // requires a Context), we directly load the scene with
                     // PXSVGLoader.loadFromURL(URL)
                     PXShapeDocument document;
-                    if (remoteImageLoader != null) {
-                        document = (PXShapeDocument) remoteImageLoader.get();
+                    if (remoteSVGLoader != null) {
+                        document = (PXShapeDocument) remoteSVGLoader.get();
                     } else {
                         document = PXSVGLoader.loadFromStream(UrlStreamOpener.open(imageURL));
                     }
@@ -131,9 +211,9 @@ public class PXImagePaint extends BasePXPaint {
                     // read the data as a bitmap image
                     InputStream inputStream = null;
                     try {
-                        Drawable d;
-                        if (remoteImageLoader != null) {
-                            d = (Drawable) remoteImageLoader.get();
+                        Drawable d = null;
+                        if (remoteBitmapLoader != null) {
+                            d = getDrawable(remoteBitmapLoader.get());
                         } else {
                             inputStream = UrlStreamOpener.open(imageURL);
                             // Try to load this data as a NinePatchDrawable. The
@@ -145,10 +225,11 @@ public class PXImagePaint extends BasePXPaint {
                             // data.
                             d = NinePatchDrawable.createFromStream(inputStream, null);
                         }
-                        if (d != null) {
-                            d.setBounds(bounds);
-                            d.draw(canvas);
+                        if (d == null) {
+                            d = new PXBorderOverlay(Color.RED, 2);
                         }
+                        d.setBounds(bounds);
+                        d.draw(canvas);
                     } finally {
                         if (inputStream != null) {
                             inputStream.close();
@@ -160,19 +241,119 @@ public class PXImagePaint extends BasePXPaint {
             } finally {
                 image.endRecording();
             }
-            // TODO - is there an Android alternative?
-            // scale = [basename hasSuffix:@"@2x"] ? 2.0f : 1.0f; // TODO: pull
-            // out number and use that?
-            //
-            // // resize, if necessary
-            // if (image && !CGSizeEqualToSize(image.size, size))
-            // {
-            // UIGraphicsBeginImageContextWithOptions(size, NO, 0.0);
-            // [image drawInRect:CGRectMake(0, 0, size.width, size.height)];
-            // image = UIGraphicsGetImageFromCurrentImageContext();
-            // UIGraphicsEndImageContext();
         }
         return image;
+    }
+
+    private Drawable getDrawable(Bitmap bitmap) {
+        if (bitmap == null) {
+            return null;
+        }
+        Drawable d;
+        byte[] chunk = bitmap.getNinePatchChunk();
+        boolean isNinePatch = NinePatch.isNinePatchChunk(chunk);
+        if (isNinePatch) {
+            d = new NinePatchDrawable(PixateFreestyle.getAppContext().getResources(), bitmap,
+                    chunk, new Rect(), null);
+        } else {
+            d = new BitmapDrawable(PixateFreestyle.getAppContext().getResources(), bitmap);
+        }
+        return d;
+    }
+
+    /**
+     * Initialize the remote bitmap loader with the dimensions of the bitmap we
+     * would like to load.
+     * 
+     * @param bounds
+     */
+    private void initRemoteLoader(final Rect bounds) {
+        // TODO - We assume here that this PXImagePaint will only download the
+        // bitmap for the first Rect bounds it gets. In case a different request
+        // will arrive later, the same bitmap will be used eventually. We may
+        // want to change this...
+
+        if (isRemote()) {
+
+            // Start a task to load the image.
+            // Note that this requires INTERNET permissions in the
+            // manifest.
+            // <uses-permission android:name="android.permission.INTERNET"/>
+
+            if (remoteSVGLoader == null && hasSVGImageURL()) {
+                // Prepare and start a remote SVG
+                remoteSVGLoader = new RemoteLoader<PXShapeDocument>() {
+
+                    protected PXShapeDocument doLoad(Uri uri) {
+                        // load SVG (TODO Eventually we'll need a callback
+                        // here too)
+                        try {
+                            return PXSVGLoader.loadFromStream(UrlStreamOpener.open(uri.toString()));
+                        } catch (Exception e) {
+                            PXLog.e(TAG, e, "Error while loading remote SVG " + uri);
+                        }
+                        // TODO - Return an SVG 'error' shape.
+                        return null;
+                    }
+
+                };
+                remoteSVGLoader.execute(imageURL);
+            } else {
+                // Prepare and start a remote Bitmap loader
+                remoteBitmapLoader = new RemoteLoader<Bitmap>() {
+                    @Override
+                    protected Bitmap doLoad(Uri uri) {
+                        try {
+                            // load bitmap
+                            int width = 0;
+                            int height = 0;
+                            if (bounds != null) {
+                                width = bounds.width();
+                                height = bounds.height();
+                            }
+                            // Note - although we are using a callback
+                            // mechanism here, we are still forcing a
+                            // synchronous mode.
+                            final Bitmap[] result = new Bitmap[1];
+                            PXURLBitmapLoader.loadBitmap(uri, width, height,
+                                    new LoadingCallback<Bitmap>() {
+
+                                        @Override
+                                        public void onError(Throwable error) {
+                                            PXLog.e(TAG, error, "Error while downloading a bitmap");
+                                        }
+
+                                        @Override
+                                        public void onLoaded(Bitmap bm) {
+                                            result[0] = bm;
+                                        }
+                                    }, true);
+                            return result[0];
+                        } catch (Exception e) {
+                            PXLog.e(TAG, e, "Error while loading remote image " + uri);
+                        }
+                        return null;
+                    }
+                };
+                remoteBitmapLoader.execute(imageURL);
+            }
+        }
+    }
+
+    /**
+     * Returns <code>true</code> if this instance have an image {@link Uri} that
+     * points to an http or https location.
+     * 
+     * @return <code>true</code> if this image-paint is pointing to a remote
+     *         location.
+     */
+    public boolean isRemote() {
+        if (imageURL != null) {
+            String scheme = imageURL.getScheme();
+            return (scheme != null && SUPPORTED_REMOTE_SCHEMES.contains(scheme
+                    .toLowerCase(Locale.US)));
+        }
+        return false;
     }
 
     public void applyFillToPath(Path path, Paint paint, Canvas context) {
@@ -200,5 +381,68 @@ public class PXImagePaint extends BasePXPaint {
     public PXPaint darkenByPercent(float percent) {
         // TODO
         return this;
+    }
+
+    /**
+     * A wrapper loader that can execute as an {@link AsyncTask} when initiated
+     * from the UI thread, or execute synchronously when running from a non-UI
+     * thread.
+     * 
+     * @param <Params>
+     * @param <Progress>
+     * @param <Result>
+     */
+    private abstract class RemoteLoader<R> {
+        private AsyncTask<Uri, Void, R> task;
+        private Uri uri;
+
+        /**
+         * Call this execute to initiate the {@link Uri} an the an internal
+         * {@link AsyncTask} in case called from the UI thread.
+         * 
+         * @param uri
+         */
+        public void execute(Uri uri) {
+            this.uri = uri;
+            if (Looper.getMainLooper() == Looper.myLooper()) {
+                // The loader was constructed at the UI thread.
+                task = new AsyncTask<Uri, Void, R>() {
+                    @Override
+                    protected R doInBackground(Uri... params) {
+                        return doLoad(params[0]);
+                    }
+                };
+                task.execute(uri);
+            }
+        }
+
+        /**
+         * Returns the loading result. This method will block until a result is
+         * received.
+         * 
+         * @return The loading result (can be <code>null</code> in case of an
+         *         error)
+         */
+        public R get() {
+            if (task != null) {
+                try {
+                    return task.get();
+                } catch (Exception e) {
+                    PXLog.e(TAG, e, "Error loading an image/svg ('%s')", uri);
+                    return null;
+                }
+            }
+            // synchronous loading
+            return doLoad(uri);
+        }
+
+        /**
+         * Do the actual result loading.
+         * 
+         * @param uri
+         * @return The loading result.
+         */
+        protected abstract R doLoad(Uri uri);
+
     }
 }
