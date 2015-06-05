@@ -15,14 +15,6 @@
  ******************************************************************************/
 package com.pixate.freestyle.styling;
 
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.List;
-import java.util.regex.Pattern;
-
-import android.graphics.Color;
-import android.util.DisplayMetrics;
-
 import com.pixate.freestyle.cg.math.PXDimension;
 import com.pixate.freestyle.cg.paints.PXGradient;
 import com.pixate.freestyle.cg.paints.PXPaint;
@@ -30,6 +22,7 @@ import com.pixate.freestyle.cg.paints.PXPaintGroup;
 import com.pixate.freestyle.cg.paints.PXSolidPaint;
 import com.pixate.freestyle.styling.adapters.PXStyleAdapter;
 import com.pixate.freestyle.styling.cache.PXStyleInfo;
+import com.pixate.freestyle.styling.parsing.PXStylesheetParser;
 import com.pixate.freestyle.styling.selectors.PXTypeSelector;
 import com.pixate.freestyle.styling.stylers.PXStyler;
 import com.pixate.freestyle.styling.virtualStyleables.PXVirtualStyleable;
@@ -37,6 +30,16 @@ import com.pixate.freestyle.util.CollectionUtil;
 import com.pixate.freestyle.util.PXColorUtil;
 import com.pixate.freestyle.util.PXLog;
 import com.pixate.freestyle.util.StringUtil;
+import com.pixate.freestyle.util.ViewUtil;
+
+import android.graphics.Color;
+import android.util.DisplayMetrics;
+import android.view.View;
+
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+import java.util.regex.Pattern;
 
 /**
  * Pixate styling utilities.
@@ -238,6 +241,22 @@ public class PXStyleUtils {
             PXLog.w(TAG,
                     "Stylesheet was not found. Make sure you have your style CSS in the assets.");
         }
+
+        //parse inline css
+        if(styleable instanceof View) {
+            View view = (View)styleable;
+            String inlineCss = (String)view.getTag(ViewUtil.TAG_STYLE);
+            if(inlineCss != null && inlineCss.trim().length() > 0) {
+                PXStylesheetParser stylesheetParser = new PXStylesheetParser(view.getContext());
+                PXStylesheet pxStylesheet = stylesheetParser.parseInlineCSS(inlineCss);
+                List<PXRuleSet> inLineRuleSets = pxStylesheet.getRuleSets(view.getContext());
+                for(PXRuleSet item : inLineRuleSets){
+                    item.addSelector(new PXTypeSelector());
+                }
+                ruleSets.addAll(inLineRuleSets);
+            }
+        }
+
         // TODO: add matching sets from user stylesheet and view stylesheet
         return ruleSets;
 
