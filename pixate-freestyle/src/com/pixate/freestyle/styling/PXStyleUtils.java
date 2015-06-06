@@ -243,7 +243,7 @@ public class PXStyleUtils {
         }
 
         //parse inline css
-        if(styleable instanceof View) {
+        if(styleable != null && styleable instanceof View) {
             View view = (View)styleable;
             String inlineCss = (String)view.getTag(ViewUtil.TAG_STYLE);
             if(inlineCss != null && inlineCss.trim().length() > 0) {
